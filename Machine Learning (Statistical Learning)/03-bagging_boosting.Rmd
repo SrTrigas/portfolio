@@ -1,0 +1,107 @@
+---
+title: "Ejercicio del Capítulo 3: Bagging y Boosting"
+output:
+  html_document:
+    # pandoc_args: ["--number-offset", "1,0"]
+    toc: yes
+    # pandoc_args: ["--number-offset", "1,0"]
+  bookdown::html_document2:
+    # pandoc_args: ["--number-offset", "1,0"]
+    toc: yes
+    # mathjax: local            # copia local de MathJax, hay que establecer:
+    # self_contained: false     # las dependencias se guardan en ficheros externos
+---
+
+<!--
+knitr::purl("03-bagging_boosting-ejercicios.Rmd", documentation = 2)
+knitr::spin("03-bagging_boosting-ejercicios.R", knit = FALSE)
+-->
+
+```{r }
+library(rpart)
+library(rpart.plot)
+```
+
+<!--
+
+```{exercise, label="selección de los hiperparámetros en un bosque aleatorio"}
+```
+-->
+
+##  Ejercicio 3.1: selección de los hiperparámetros en un bosque aleatorio {-}
+
+Este ejercicio porpone emplear la función `randomForest()` para ajustar un bosque aleatorio con el fin de clasificar la calidad del vino  `taste` entre los vinos categorizados como buenos `good`
+ o malos `bad`.
+
+```{r }
+load("./data/winetaste.RData")
+set.seed(1)
+df <- winetaste
+nobs <- nrow(df)
+itrain <- sample(nobs, 0.8 * nobs)
+train <- df[itrain, ]
+test <- df[-itrain, ]
+```
+
+### Solución {-}
+
+Se carga la librería, se fija el número de árboles a crecer
+ y se crea un grid para lós hiperparámetros `mtry` y `nodesize`.
+
+```{r ,warning=F,message=F}
+library(randomForest)
+ntree <- 500
+mtry.class <- sqrt(ncol(train) - 1)
+tune.grid <- expand.grid(
+  mtry = floor(c(mtry.class/2, mtry.class, 2*mtry.class)),
+  nodesize = c(1, 3, 5, 10),
+  error.oob = NA
+)
+```
+
+A continuación se ajusta un modelo para cada combinación de hiperparámetros,
+en cada iteración se evalúa si hay una mejora en el modelo,
+
+```{r }
+best.err <- Inf
+for (i in 1:nrow(tune.grid)){
+  set.seed(1)
+  fit <- randomForest(taste ~ ., data = train[,], ntree = ntree,
+                      mtry = tune.grid$mtry[i], nodesize = tune.grid$nodesize[i])
+  fit.error <- with(fit, err.rate[ntree, "OOB"])
+  tune.grid$error.oob[i] <- fit.error
+  if (fit.error < best.err) {
+    final.model <- fit
+    best.err <- fit.error
+    best.tune <- tune.grid[i, ]
+  }
+}
+```
+
+***NOTA***: Se establece la semilla dentro del bucle de seleccionar hiperparámetros para que todos los modelos se ajusten y evalúen con los mismos datos (de esta forma se elimina la variabilidad debida a diferencias en las muestras de validación).
+
+Se muestran los errores para cada combinación de hiperparámetros
+
+```{r }
+tune.grid
+```
+
+Para la combinación con menor error (modelo final), se muestra la evolución del error en función
+del número de árboles utilizados y el mejor ajuste.
+
+```{r }
+best.tune
+final.model
+plot(final.model)
+```
+
+Por último, se mide la capacidad predictiva del mejor modelo
+
+```{r }
+pred <- predict(final.model, newdata = test)
+caret::confusionMatrix(pred, test$taste,positive="good")
+```
+
+Nótese que este procedimiento ofrece mejores resultados que los proporcionados por los arboles
+de decisión ajustados en el Capítulo anterior.
+

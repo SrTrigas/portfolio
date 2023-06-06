@@ -1,0 +1,447 @@
+---
+title: 'Práctica 1: Clasificación'
+author: 'Grupo 4'
+date: "Curso 2022/2023"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+Jaime Jovanny Castillo Contreras \newline
+Helena Nina del Río Ares \newline
+Iván Trigás Santana \newline
+Alba Vilar González \newline
+<!-- Esta práctica debe entregarse antes del miércoles 22 de noviembre de 2022 en formato pdf,  -->
+
+<!-- incluyendo el código R utilizado, las correspondientes salidas  -->
+
+<!-- y los comentarios (o interpretaciones de los resultados) pertinentes -->
+
+<!-- (para ello se recomienda emplear RMarkdown,  -->
+
+<!-- a partir de un fichero *.Rmd* o un fichero *.R* mediante spin). -->
+
+<!-- Se empleará el conjunto de datos `Boston0X` almacenado en el archivo *Boston0X.RData*,  -->
+
+<!-- donde *X* es el número de grupo, considerando como respuesta la variable `fmedv` -->
+
+<!-- que clasifica las valoraciones de las viviendas en `"Alto"` o `"Bajo"` (aunque en este  -->
+
+<!-- caso los niveles están ordenados para evitar problemas). -->
+
+<!-- El data frame contiene 480 filas y 10 variables,  la variable respuesta `fmedv` y otras 9 covariables de entre la siguiente lista de variables (todas ellas continuas): -->
+
+<!-- Predictores  | Descripción -->
+
+<!-- --------- | ------------------ -->
+
+<!-- crim | Tasa de criminalidad per cápita por ciudad. -->
+
+<!-- zn | Proporción de suelo residencial para lotes de más de 25,000 pies$^2$. -->
+
+<!-- indus | proporción de acres comerciales no minoristas por ciudad. -->
+
+<!-- chas | Variable binaria respecto al río Charles (`= 1` si el tramo limita con el río; `0` en caso contrario). -->
+
+<!-- nox | concentración de óxidos de nitrógeno (ppm). -->
+
+<!-- rm | Número medio de habitaciones por vivienda. -->
+
+<!-- age | Proporción de viviendas ocupadas por sus propietarios (construidas antes de 1940). -->
+
+<!-- dis | Media ponderada de las distancias a cinco centros de empleo en Boston. -->
+
+<!-- rad | Índice de accesibilidad a las carreteras radiales (incluyendo autopistas y autovías). -->
+
+<!-- tax | Tasa de impuesto a la propiedad de valor total (por cada 10,000$). -->
+
+<!-- ptratio | Relación alumno-docente por ciudad. -->
+
+<!-- lstat | Porcentaje del menor estatus de la población. -->
+
+Con los datos de `Boston04` vamos a ajustar y estudiar tres
+modelos: un árbol de decisión, un ajuste mediante Boosting y otro
+mediante SVM, con el objetivo clasificar las valoraciones de las
+viviendas de Boston en los niveles "Alto" o "Bajo".
+
+\hspace{3mm}
+
+Empezmos leyendo los datos, y separando las muestras de entrenamiento y
+de test, tomando para cada una el $75$ y el $25\%$ de los datos
+respectivamente.
+
+```{r lectura de datos}
+load("Boston04.RData")
+sem=40
+nobs <- nrow(Boston04)
+set.seed(sem)
+itrain <- sample(nobs, 0.75 * nobs)
+train <- Boston04[itrain, ]
+test <- Boston04[-itrain, ]
+```
+
+El primer modelo ajustado es un árbol de decisión. Lo haremos primero
+utilizando las opciones por defecto de la función `rpart` de R.
+
+```{r arbol por defecto}
+library(rpart)
+library(rpart.plot)
+set.seed(sem)
+tree <- rpart(fmedv ~ ., data = train)
+```
+
+El árbol obtenido es el siguiente:
+
+```{r plot arbol por defecto, out.width="60%", fig.align = 'center'}
+rpart.plot(tree, main="Classification tree fmedv inicial")
+```
+
+A continuación, ajustamos el parámetro de complejidad, "cp", mediante la
+regla de un error estándar de Breiman, que consiste en ajustar el modelo
+más sencillo que diste menos de un error estándar del óptimo.
+
+```{r un error estandar}
+xerror <- tree$cptable[,"xerror"]
+imin.xerror <- which.min(xerror)
+upper.xerror <- xerror[imin.xerror] + tree$cptable[imin.xerror, "xstd"]
+icp <- min(which(xerror <= upper.xerror))
+cp <- tree$cptable[icp, "CP"]
+cp
+```
+
+El valor obtenido para $cp$ es $0.01$, que se corresponde con el valor
+que toma por defecto la función $rpart$, por lo que no será necesario
+podar el árbol.
+
+\hspace{3mm}
+
+El funcionamiento de este árbol es el siguiente: Dada una observación,
+lo primero que hacemos es comprobar el valor de la variable `rm`.
+Si es menor que $6.5$, esa observación de clasifica directamente en el
+nivel bajo. Esto sucede con el $69\%$ de las observaciones, de las
+cuales un $96\%$ tienen, en efecto, $fmedv="Bajo"$. Si, por el
+contrario, el valor de $rm$ es mayor o igual que $6.5$, entonces
+comprobamos la variable $ptratio$. Si el valor de esta variable es menor
+que 19, se clasificará la observación en nivel alto. En caso contrario,
+se clasifica en nivel bajo. En total, se clasifica en nivel alto el
+$24\%$ de las observaciones, de las cuales un $88\%$ están clasificadas
+correctamente. Las observaciones clasificadas en nivel bajo en esta
+segunda partición son un $7\%$ de los datos, del cual está bien
+clasificado un $76\%$.
+
+\hspace{3mm}
+
+A continuación estudiamos la importancia de las variables en el ajuste.
+
+```{r importancia de las variables}
+
+importance <- tree$variable.importance
+importance <- round(100*importance/sum(importance), 1)
+importance[importance >= 1]
+```
+
+Como es de esperar, la variable `rm` es la más importante, ya que
+es la que se toma para la primera partición, y solo teniendo en cuenta
+el valor de esta variable ya clasificamos el $69\%$ de las
+observaciones. En segundo lugar está `indus`, es decir, en
+ausencia de `rm`, esta sería la que se usaría para la primera
+partición. Sin embargo, utilizando `rm`, la variable
+`indus` ni siquiera llega a aparecer en el árbol. La tercera
+variable con mayor porcentaje de importancia es `ptratio`, que es
+la otra que se utiliza en el modelo ajustado, por lo que es normal que
+aparezca en un puesto alto. Cabe destacar también que, mientras que `rm` tiene un porcentaje de importancia notablemente mayor que la
+variable en segundo lugar, las diferencias entre el resto de variables
+son mucho más modestas, siendo el porcentaje de cada una apenas dos o
+tres puntos menor que el de la anterior.
+
+\hspace{3mm}
+
+Por último, evaluamos la precisión de las predicciones en la muestra de
+test. Lo primero que hacemos es calcular la tabla de contingencia de las
+mismas:
+
+```{r predicciones}
+obs<-test$fmedv
+pred <- predict(tree, newdata = test, type = "class")
+table(obs, pred)
+```
+
+De las observaciones pertenecientes a la clase "Bajo", 91 han sido
+clasificadas correctamente, y 3 se han clasificado en la categoría
+incorrecta. Para las observaciones de clase "Alto" tenemos 20 clasificaciones correctas y 6
+incorrectas. Es decir, el modelo tiende a clasificar incorrectamente a
+las observaciones de nivel alto más que a las de nivel bajo. Esto se
+debe a que el modelo está ajustado con una muestra en la que las clases
+están desbalanceadas. Como nos indica el primer nodo del árbol
+representado, el $74\%$ de las observaciones de la muestra de
+entrenamiento se corresponden con el nivel bajo. Esto hace que, cuando la clasificación no está muy clara, es decir, cuando los
+valores del resto de variables serían factibles en cualquiera de los dos
+niveles, se tienda a clasificar en nivel "Bajo", ya que es la categoría
+a la que pertenecen la mayoría de los datos.
+
+Con el paquete caret obtenemos distintas medidas de precisión para las
+predicciones.
+
+```{r medidas de precision}
+caret::confusionMatrix(pred, obs,positive="Bajo")
+```
+
+El accuracy toma un valor de 0.925, pero, como las clases son
+desbalanceadas, esta medida no es apropiada para evaluar el
+funcionamiento del modelo, siendo más fiable el balanced accuracy, que
+es igual a 0.8687.
+
+Estudiemos ahora las estimaciones de las probabilidades de pertenecer a
+la categoría "Bajo". Para ello representamos, para las observaciones de
+cada categoría, el histograma de las probabilidades estimadas por el
+modelo de que la variable `fmedv` tome el valor "Bajo".
+
+```{r predicciones de probs, out.width="55%", fig.align = 'center'}
+p.est<- predict(tree,type="prob",newdata=test)
+library(lattice)
+histogram(~ p.est[,2] | obs, xlab = "Probabilidad estimada")
+```
+
+Las observaciones se clasifican en nivel bajo cuando esta probabilidad
+es mayor que $0.5$, y en nivel alto en caso contrario.
+
+Como es de esperar, ya que hemos visto que la mayoría de las
+observaciones están bien clasificadas, la mayoría de las probabilidades
+para observaciones de la categoría "Alto" se concentran en los valores
+más bajos, mientras que las de observaciones con `fmedv="Bajo"`
+se concentran en torno al $1$. Cabe destacar también que, como veíamos
+en la tabla de contingencia, hay una cantidad no despreciable de
+observaciones de nivel alto con una probabilidad estimada que lleva a
+clasificarlas en la categoría incorrecta. Para las observaciones de
+nivel bajo, el número de observaciones con probabilidad menor que $0.5$
+es mucho menor en proporción.
+
+\hspace{3mm}
+
+Por último, calculamos la curva ROC. Recordemos que mientras más se
+acerque dicha curva a la esquina superior izquierda (donde se maximiza
+la sensibilidad y especificidad), o equivalentemente, cuanto más próxima
+esté el área debajo de la curva a 1, mejor será el clasificador.
+
+```{r libreria proc, message=FALSE}
+library(pROC)
+```
+
+```{r curva roc, out.width="55%", fig.align = 'center'}
+roc_glm <- roc(response=factor(obs,levels=c("Bajo","Alto")), predictor = p.est[,2])
+plot(roc_glm)
+roc_glm
+```
+
+En nuestro caso el área bajo la curva es igual a 0.8836 por lo que se
+puede considerar que el clasificador es bastante bueno.
+
+\hspace{3mm}
+
+A continuación, realizaremos la misma clasificación empleando Boosting
+mediante el método "ada" del paquete `caret`.
+
+```{r}
+library(rpart)
+library(rpart.plot)
+
+```
+
+Emplearemos en primer lugar validación cruzada con 5 grupos para
+seleccionar los valores "óptimos" de los hiperparámetros considerando
+las posibles combinaciones de iter = c(75, 150), maxdepth = 1:2 y nu=
+c(0.5, 0.25, 0.1) y representaremos la precisión de CV dependiendo de
+los valores de los hiperparámetros.\
+Para ello empezamos generando una rejilla con el comando de R
+expand.grid() con las posibles combinaciones.
+
+```{r}
+tune.grid <- expand.grid(
+  iter = c(75,150),
+  maxdepth = 1:2,
+  nu = c(0.5,0.25,0.1)
+)
+```
+
+Implementamos a continuación el método AdaBoost del paquete caret que
+considera como hiperparámetros:
+
+```{r}
+library(caret)
+modelLookup("ada")
+```
+
+Por defecto la función train() tan solo considera nueve combinaciones de
+hiperparámetros pero se puede aumentar el número de combinaciones usando
+tuneGrid(). Sin embargo la búsqueda de una rejilla completa puede
+aumentar considerablemente los tiempos de computación por lo que se
+suele fijar la tasa de aprendizaje (inicialmente a un valor alto) para
+seleccionar primero un número de interaciones y la complejidad del
+árbol, y posteriormente fijar estos valores para seleccionar una nueva
+tasa de aprendizaje (repitiendo el proceso, si es necesario, hasta
+convergencia).
+
+```{r}
+set.seed(sem)
+caret.ada <- train(fmedv ~ ., method = "ada", data = train,
+                    tuneGrid=tune.grid,
+                    trControl = trainControl(method = "cv", number = 5))
+caret.ada
+```
+
+Los hiperparámetros del modelo óptimo serían:
+
+```{r}
+caret.ada$bestTune
+```
+
+Representamos la precisión de CV dependiendo de los valores de los
+hiperparámetros usando plot()
+
+```{r plot ada, out.width="70%", fig.align = "center"}
+plot(caret.ada)
+```
+
+Observamos que el mejor accuracy obtenido coincide gráficamente con la
+configuración de hiperparámetros óptimos.
+
+\hspace{3mm}
+
+Representamos a continuación la evolución del error de clasificación al aumentar el número de iteraciones
+```{r evolucion error, out.width="70%", fig.align = "center"}
+set.seed(sem)
+mod.fin=train(fmedv ~ ., method = "ada", data = train,
+              tuneGrid=data.frame(iter=150,maxdepth=2,nu=0.5),
+              trControl = trainControl(method = "cv", number = 5))
+plot(mod.fin$finalModel)
+```
+
+Observamos que, según aumenta al número de iteraciones, el error decrece, rápidamente al principio, y más lento hacia las 40 iteraciones, hasta estabilizarse muy cerca del 0 en torno a las 70/80 iteraciones.
+
+El estudio de la importancia de las variables lo hacemos mediante la función varImp(). En este caso, las medidas de importancia se escalan para tener un valor máximo de 100.
+
+```{r}
+varImp(mod.fin)
+```
+
+Igual que en el árbol de decisión, la mayor importancia se le asigna a la variable \textit{rm}, seguida por \textit{indus} y \textit{ptratio}.
+
+\hspace{3mm}
+
+Por último, seguiremos el mismo procedimiento que en el modelo anterior para evaluar las predicciones de la muestra \textit{test}.
+
+```{r}
+confusionMatrix(predict(mod.fin, newdata = test), test$fmedv, positive = "Bajo")
+```
+
+En este caso el modelo clasifica en nivel alto 21 observaciones, 20 de estas correctamente. El número de clasificaciones correctas en nivel alto no varía con respecto al modelo anterior, mientras que se reducen de 3 a 1 las observaciones de nivel bajo clasificadas en alto.
+También mejora la clasificación en nivel bajo, pasando
+de clasificar correctamente 91 a 93, manteniendo en 6 los clasificados como bajo incorrectamente.
+
+El accuracy y el balanced accuracy toman ahora los valores 0.9417 y 0.8793 respectivamente, mejorando con respecto al modelo anterior.
+
+\hspace{3mm}
+
+Para estudiar las probabilidades de pertenecer a la categoría "Bajo", representamos, de nuevo, los histogramas para las observaciones de cada categoría: 
+
+```{r probs boosting histograma, out.width="55%", fig.align = 'center'}
+p.est2<- predict(mod.fin,type="prob",newdata=test)
+histogram(~ p.est2[,2] | obs, xlab = "Probabilidad estimada")
+```
+
+Los resultados son muy parecidos a los del modelo anterior, si bien ahora las probabilidades de las observaciones de nivel bajo están aún más concentradas en torno al 1. 
+
+\hspace{3mm}
+
+Calculamos ahora la curva ROC para observar cuan bueno es nuestro
+clasificador:
+
+```{r curva roc boosting, out.width="55%", fig.align = 'center'}
+roc_glm2 <- roc(response=factor(obs,levels=c("Bajo","Alto")), predictor = p.est2[,2])
+plot(roc_glm2)
+```
+
+Se obtiene un área bajo la curva de 0.9309 por lo que estamos ante un buen clasificador y ante una mejora de entorno al 5% frente al modelo anterior.
+    
+\hspace{3mm}
+
+El tercer modelo que ajustaremos será un SVM, utilizando la función ksvm() del paquete kernlab.
+
+```{r}
+library(kernlab)
+
+```
+
+Lo ajustamos primero utilizando las opciones por defecto de la función, y almacenamos el valor del parámetro sigma en `sigma0.`
+
+```{r}
+set.seed(sem)
+mod.ini=ksvm(fmedv ~ ., data = train)
+
+sigma0=as.numeric(mod.ini@kernelf@kpar)
+
+```
+
+A continuación, empleamos validación cruzada con 10 grupos para seleccionar los valores "óptimos" de los hiperparámetros, considerando las posibles combinaciones de `C = c(0.5, 1, 5)` y `sigma = c(0.5, 1, 2)*sigma0`.
+
+Empezamos fijando el grid con el que vamos a trabajar. Posteriormente calcularemos los errores del ajuste y guardaremos sus valores en la columna `error` del grid `tune.grid2`.
+
+```{r}
+tune.grid2=expand.grid(C=c(0.5,1,5),sigma=c(0.5,1,2)*sigma0,error=NA)
+best.err <- Inf
+for (i in 1:nrow(tune.grid2)){
+  set.seed(sem)
+  fit <- ksvm(fmedv ~ ., data = train,
+              kernel = "rbfdot", C=tune.grid2$C[i],sigma=tune.grid2$sigma[i],
+              trControl = trainControl(method = "cv", number = 10),prob.model=T)
+  tune.grid2$error[i] <- fit@error
+}
+tune.grid2
+```
+
+En este caso, el error de predicción solo está variando con respecto al parámetro `C`, siendo el mismo para los tres valores de `sigma` cuando este parámetro se mantiene fijo. El menor error de predicción se alcanza en `C=5`, es decir, cuando más penalizamos las clasificaciones incorrectas. Ajustaremos el modelo con `C=5` y `sigma=0.07222836`.
+
+```{r}
+C1=5.0
+sigma1=0.07222836
+final.model=ksvm(fmedv ~ ., data = train,
+              kernel = "rbfdot", C=C1,sigma=sigma1,
+              trControl = trainControl(method = "cv", number = 10),prob.model=T)
+```
+
+\hspace{3mm}
+
+Evaluamos ahora la precisión de las predicciones de este tercer modelo.
+
+
+```{r}
+pred3 <- predict(final.model, newdata = test)
+caret::confusionMatrix(pred3, test$fmedv,positive="Bajo")
+
+```
+
+En este caso el modelo predice como alto 20 observaciones, todas correctamente. Son los mismos aciertos clasificando en nivel alto que el resto de modelos, pero en este caso sin
+ningún error, mejorando en este aspecto a los modelos anteriores.
+También mejora en la predicción de bajos, pasa a clasificar
+correctamente 94 frente a los 91 y 93 de los modelos anteriores, manteniendo en 6 los clasificados incorrectamente en nivel bajo.
+
+Cabe destacar también que respecto a los modelos
+realizados anteriormente, tanto el Accuracy como el Balanced Accuracy también aumentan, siendo ahora 0.95 y 0.8846 respectivamente.
+
+Representando los mismos histogramas que en los modelos anteriores vemos que, si bien el número de clasificaciones correctas ha aumendado, estando, de hecho, todas las observaciones de nivel bajo clasificadas correctamente como tal, las probabilidades están mucho más repartidas que en los modelos anteriores. Esto en principio no supone un problema ya que, como estamos viendo, la clasificación ha mejorado bajo todos los criterios.
+```{r predicciones de probs SVM, out.width="55%", fig.align = 'center'}
+p.est3<- predict(final.model,type="probabilities",newdata=test)
+histogram(~ p.est3[,2] | obs, xlab = "Probabilidad estimada")
+```
+
+Y, por último, volvemos a utilizar la curva ROC para comprobar cómo de bueno es el clasificador.
+
+```{r curva ROC SVM, out.width="55%", fig.align = 'center'}
+roc_glm3 <- roc(response=factor(obs,levels=c("Bajo","Alto")), predictor = p.est3[,2])
+plot(roc_glm3)
+roc_glm3
+```
+
+El área bajo la curva es ahora igual a 0.9505, por lo que estamos ante un buen clasificador y, de nuevo, ante una mejora frente a los modelos anteriores.

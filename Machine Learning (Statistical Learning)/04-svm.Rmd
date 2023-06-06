@@ -1,0 +1,172 @@
+---
+title: "Ejercicio del Capítulo 4: Máquinas de soporte vectorial"
+bibliography: ["packages.bib", "aprendizaje_estadistico.bib"]
+link-citations: yes
+output: 
+  bookdown::html_document2:
+    pandoc_args: ["--number-offset", "3,0"]
+    toc: yes 
+    # mathjax: local            # copia local de MathJax, hay que establecer:
+    # self_contained: false     # las dependencias se guardan en ficheros externos 
+  bookdown::pdf_document2:
+    keep_tex: yes
+    toc: yes 
+---
+
+<!-- 
+bookdown::preview_chapter("04-svm.Rmd")
+knitr::purl("04-svm_new.Rmd", documentation = 2)
+knitr::spin("04-svm.R",knit = FALSE)
+-->
+
+```{r , child = '_global_options.Rmd'}
+```
+## Selección de los hiperparámetros en un SVM {-}
+
+Este ejercicio porpone emplear la función `ksvm` para ajustar un bosque aleatorio con el fin de clasificar la calidad del vino  `taste` entre los vinos categorizados como buenos `good`
+ o malos `bad`. 
+ 
+| Notar que el paquete `kernlab` usa métodos de la clase **S4** (que permite definir las propiedades a las classes mediante (slots) a costa de una definición más estricta de la clase del objeto.    Otra alternativa son los métodos **R6** (implementados por ejemplo en el metapaquete `mlr3`), se puede encontrar más información sobre los tipos de clase **S3**, **S4** y **R6** y la programación orientada a objetos en [https://adv-r.hadley.nz/oo.html](https://adv-r.hadley.nz/oo.html).
+ 
+<!-- 
+A diferencia del los paquetes previos que usaban la clase **S3** (que permitía asignar libremente una clase a un objeto).
+ 
+ **S4** es más estricto en la definición de las clases (requiere hacerlo mediante la función `setClass()`) y permite definir las propiedades (slots) que tenga cada clase. Este es el paradigma usado en muchos de los paquetes del proyecto [bioconductor](https://www.bioconductor.org/).
+
+Otra alternativa son los métodos **R6** (implementados por ejemplo en el metapaquete `mlr3`) que son útiles a la hora de modelar objetos que existen independientemente de R (como datos que provengan de una API cuyos valores se pudean modificar dentro o fuera de R). Son por tanto objetos orientados encapusulados  (mutables) pero pero difíciles de entente, por lo que pocos usuarios de R apenas los entienden y por tanto realizan contribuciones.
+-->
+
+
+```{r }
+ load("data/winetaste.RData")
+# # Partición de los datos
+set.seed(1)
+df <- winetaste
+nobs <- nrow(df)
+itrain <- sample(nobs, 0.8 * nobs)
+train <- df[itrain, ]
+test <- df[-itrain, ]
+```
+
+```{r ,warning=F,message=F}
+library(kernlab)
+set.seed(1) 
+# La selección de sigma = mean(sigest(taste ~ ., data = train)[-2]) 
+# depende de la semilla
+svm <- ksvm(as.formula(taste ~ .), data = train,
+            kernel = "rbfdot", prob.model = TRUE)
+svm
+# plot(svm, data = train) # produce un error packageVersion("kernlab") ‘0.9.31’
+
+# alternativa a llamar al ksvm usando (x,y) en lugrar de (formula,data)
+# svm <- ksvm(as.matrix(train[,-12]),train[,"taste"], kernel = "rbfdot")
+
+# `cross`: número grupos para validación cruzada (por defecto es 0 y no
+# se hace validación cruzada). Si es mayor que 1 se realizará validación cruzada
+# y se devolverá el error en la svm 
+
+set.seed(1) 
+svm.vc <- ksvm(as.formula(taste ~ .), data = train,
+            kernel = "rbfdot", prob.model = TRUE,cross=5)
+svm.vc@cross
+# también se puede acceder con: cross(svm.vc)
+```
+
+Podemos evaluar la precisión en la muestra de test empleando el procedimiento habitual:
+
+```{r }
+pred <- predict(svm, newdata = test)
+caret::confusionMatrix(pred, test$taste)
+```
+
+Para obtener las estimaciones de las probabilidades por clase:
+
+```{r }
+p.est <- predict(svm, newdata = test, type = "probabilities")
+obs <- test$taste
+colnames(p.est) <- levels(obs)
+head(data.frame(p.est,pred,obs))
+```
+
+## Selección de los hiperparámetros en un SVM con `caret` {-}
+
+
+Este procedimiento (*`ksvm` con kernel radial*) está implementado en el método
+`"svmRadial"` de `caret` y considera como hiperparámetros:
+
+```{r ,warning=F,message=F}
+library(caret)
+# names(getModelInfo("svm")) # 17 métodos
+modelLookup("svmRadial")
+```
+
+La función `train()` por defecto evaluará únicamente tres valores del hiperparámetro
+`C = c(0.25, 0.5, 1)` y fijará el valor de `sigma`. 
+
+Alternativamente podríamos establecer la rejilla de búsqueda, por ejemplo:
+
+```{r }
+tuneGrid <- data.frame(sigma = kernelf(svm)@kpar$sigma, # Emplea clases S4
+                       C = 2^(-4:3))
+set.seed(1)
+caret.svm1 <- train(taste ~ ., data = train,
+    method = "svmRadial", preProcess = c("center", "scale"),
+    trControl = trainControl(method = "cv", number = 5),
+    tuneGrid = tuneGrid, prob.model = TRUE)
+caret.svm1
+varImp(caret.svm1)
+```
+
+
+Podríamos continuar con la búsqueda marginal de los hiperparámetros, con tal de obtener un valor de `sigma` óptimo:
+
+```{r }
+tuneGrid <- data.frame(sigma = seq(0.02,0.1,by=0.02), C = 2)
+set.seed(1)
+caret.svm2 <- train(taste ~ ., data = train,
+    method = "svmRadial", preProcess = c("center", "scale"),
+    trControl = trainControl(method = "cv", number = 5),
+    tuneGrid = tuneGrid, prob.model = TRUE)
+caret.svm2
+```
+
+Notar que este procedimiento debería iterarse tantas veces como fuese necesario
+hasta obtener convergencia (los valores estables para los hiperparámetros). 
+Otra alternativa a esta búsqueda marginal sería utilizar un `expand.grid` 
+para la selección de los hiperparámetros como en el ejercicio *Ejercicio 3.1*
+
+Además, `caret` permite cambiar el criterio de error en `train()` a AUC en lugar de precisión
+usando
+
+```{r }
+# tuneGrid <- data.frame(sigma = seq(0.02,0.1,by=0.02), C = 2)
+set.seed(1)
+caret.svm3 <- train(taste ~ ., data = train,
+    method = "svmRadial", preProcess = c("center", "scale"),
+    trControl = trainControl(method = "cv", number = 5, classProbs = TRUE,
+                              summaryFunction = twoClassSummary),
+    tuneGrid = tuneGrid,  metric = "ROC")
+caret.svm3
+```
+
+## Evaluación de las estimaciones de la probabilidad en la muestra de test {-}
+
+Además de  evaluar la precisión de las predicciones de la forma habitual (usuando `confusionMatrix`) y calcular las estimaciones de la probabilidad, podemos  emplear la curva ROC para representa gráficamente la especificidad (tasa de falsos negativos) en el eje **X** frente a la la sensibilidad (TPR) en el eje **Y** para distintos valores de corte.
+
+```{r ,warning=F,message=F}
+confusionMatrix(predict(caret.svm1, newdata = test), test$taste)
+confusionMatrix(predict(caret.svm2, newdata = test), test$taste)
+confusionMatrix(predict(caret.svm3, newdata = test), test$taste)
+library(pROC)
+p.caret1 <- predict(caret.svm1, newdata = test,type = "prob")
+p.caret2 <- predict(caret.svm2, newdata = test,type = "prob")
+p.caret3 <- predict(caret.svm3, newdata = test,type = "prob")
+roc_caret1 <- roc(response = obs, predictor = p.caret1[,"good"])
+roc_caret2 <- roc(response = obs, predictor = p.caret2[,"good"])
+roc_caret3 <- roc(response = obs, predictor = p.caret3[,"good"])
+# View((as.data.frame(roc_caret1[2:4])))  
+plot(roc_caret1)
+plot(roc_caret2,col=2,add=T)
+plot(roc_caret3,col=3,add=T)
+```
+

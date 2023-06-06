@@ -1,0 +1,256 @@
+---
+title: "Practica2"
+author: "Helena Nina del Rio, Alba Vilar González, Jaime Jovanny Castillo Contreras"
+date: "2022-12-09"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Empezamos cargando los datos que emplearemos así como diviendo nuestra muestra en entrenamiento y test.
+
+```{r}
+load("ames4.RData")
+dim(ames4)
+set.seed(40)
+nobs <- nrow(ames4)
+itrain <- sample(nobs,0.8*nobs)
+train<-ames4[itrain,]
+test<-ames4[-itrain,]
+x<-as.matrix(train[,-11])
+y<-train$Sqrt_Price
+
+
+```
+Por otra parte, definimos la función que nos permitirá calcular las diversas medidas de precisión para los diferentes modelos que iremos ajustando. 
+```{r}
+accuracy <- function(pred, obs, na.rm = FALSE,
+                     tol = sqrt(.Machine$double.eps)) {
+  err <- obs - pred     # Errores
+  if(na.rm) {
+    is.a <- !is.na(err)
+    err <- err[is.a]
+    obs <- obs[is.a]
+  }
+  perr <- 100*err/pmax(obs, tol)  # Errores porcentuales
+  return(c(
+    me = mean(err),           # Error medio
+    rmse = sqrt(mean(err^2)), # Raíz del error cuadrático medio
+    mae = mean(abs(err)),     # Error absoluto medio
+    mpe = mean(perr),         # Error porcentual medio
+    mape = mean(abs(perr)),   # Error porcentual absoluto medio
+    r.squared = 1 - sum(err^2)/sum((obs - mean(obs))^2) # Pseudo R-cuadrado
+  ))
+}
+```
+Empezaremos trabajando con el modelo lineal con penalización lasso, seleccionando en primer lugar el parámetro $\lambda$ por validación cruzada empleando el criterio de un error estándar de Breiman. 
+
+```{r}
+library(glmnet)
+set.seed(40)
+cv.lasso <- cv.glmnet(x,y)
+cv.lasso$lambda.1se
+```
+
+Los coeficientes del modelo que utiliza el $\lambda$ seleccionado anteriormente son:
+
+```{r}
+coef(cv.lasso)
+```
+Este modelo ha fijado a cero las variables `Bsmt_Half_Bath`, `Encolsed_Porch` y `Three_season_porch`, porque son las menos significativas. Esto lo podemos confirmar ajustando un modelo de regresión lineal multivariante sin ningún tipo de penalización. Las variables menos significativas para explicar el precio de las viviendas en este modelo son precisamente las que el modelo de regresión lasso ha fijado a cero. 
+
+```{r}
+summary(lm(y~as.matrix(x)))
+```
+
+\hspace{3mm}
+
+Calculamos ahora las predicciones para la muestra test. Para las medidas de precisión utilizamos la función \emph{accuracy} definida anteriormente.
+```{r}
+obs<-test[,11]
+pred <- predict(cv.lasso, newx = as.matrix(test[,1:10]))
+accuracy(pred, obs) 
+```
+
+Podemos tomar como medidas de precisión el pseudo R cuadrado ajustado y el RMSE (Raíz del error cuadrático medio), que son iguales a $0.7058$ y $53.2624$ respectivamente.
+
+\hspace{3mm}
+
+Veamos cómo nos ha quedado el gráfico de predicciones frente a observaciones (recordemos que mejor será el ajuste cuanto más alineados estén los puntos a la recta $y=x$):
+
+```{r plot observaciones predicciones lasso, out.width="80%", fig.align = 'center'}
+plot(pred, obs, xlab = "Predicción", ylab = "Observado",main="Lasso")
+abline(a = 0, b = 1)
+
+```
+Si bien los puntos podrían ajustarse en cierta medida a la recta, podemos ver que hay tramos donde casi todos los puntos están a un lado de la recta. Esto es notorio sobre todo cuanto más nos acercamos a la frontera superior. 
+
+\hspace{3mm}
+
+Por último, veremos qué coeficientes obtendríamos en caso de usar el $\lambda$ que minimiza el error de validación cruzada. Este $\lambda$ es igual a 0.434.  
+
+```{r lasso cv min}
+lambdamin<-cv.lasso$lambda.min
+lambdamin
+```
+Los coeficientes de este modelo que utiliza este valor de $\lambda$ son los siguientes: 
+
+```{r coef lasso cv min}
+coef(cv.lasso,s=lambdamin)
+```
+En este caso ninguno llega a tomar el valor 0. Nótese que en el modelo anterior la penalización era igual a $7$, considerablemente más grande que la que estamos tomando ahora, y que en ese caso se eliminaban tres variables. Es razonable, por lo tanto, que al reducir tanto la penalización, no se llegue a eliminar ninguna. 
+
+\hspace{3mm}
+
+Ajustaremos ahora un modelo mediante regresión spline adaptativa multivariante. Para ello, creamos la rejilla con `degree=1:2` y `nprune=c(5,10,15)` y utilizamos validación cruzada con 5 grupos empleando el criterio de un error estándar de Breiman. 
+
+
+```{r ajuste MARS, message=FALSE}
+library(caret)
+tune.grid=expand.grid(degree=1:2,nprune=c(5,10,15))
+
+set.seed(40)
+caret.mars <- train(Sqrt_Price ~ ., data = train, method = "earth",
+                    trControl = trainControl(method = "cv", number = 5, selectionFunction = "oneSE"),
+                    tuneGrid = tune.grid)
+caret.mars
+```
+El modelo final selecciona los parámetros `nprune=10` y `degree=1`,es decir, vamos a ajustar un modelo sin interacciones y con un máximo de 10 términos. Representando los errores de validación cruzada, vemos que en este caso los parámetros obtenidos mediante la regla de un error estándar son los mismos que los correspondientes al óptimo global. 
+```{r plot mars cv, out.width="80%", fig.align = 'center'}
+ggplot(caret.mars, highlight = TRUE)
+```
+
+\hspace{3mm}
+
+Utilizando las herramientas del paquete `caret` analizamos el modelo final, donde podemos ver los coeficientes del modelo:
+
+```{r}
+summary(caret.mars$finalModel)
+```
+Se puede observar que el término más influyente en el modelo es h(Year_Built-2006) con un coeficiente de $15.93551$. 
+
+\hspace{3mm}
+
+Revisamos la importancia de las variables originales en el modelo final con `varImp`:
+```{r}
+varImp(caret.mars$finalModel) 
+```
+Cada vez que un una variable se añade al el modelo, se reduce el $GCV$. Esta reducción acumulada es la que se utiliza como medida de importancia. Según este criterio, en este modelo la variable mas importante es `Total_Bsmt_SF`
+
+
+Podemos ver el efecto de las variables utilizadas en los gráficos siguientes:
+```{r efecto variables mars, out.width="85%", fig.align = 'center'}
+plotmo(caret.mars$finalModel, degree2 = 0, caption = 'Efectos principales')
+
+```
+En estos gráficos se representa el efecto que produce cada variable en la respuesta cuando el resto de variables se mantienen fijas. Vemos que todas las variables tienen un efecto creciente sobre la respuesta, siendo este más notorio en `Total_Bsmt_SF`, `Second_Flr_SF`y `Year_Built`, mientras que en el resto de variables la curva sería casi plana. Vemos también que, para la mayoría de variables, hay algún punto donde la pendiente cambia, normalmente cerca de uno de los dos extremos. Por ejemplo, para `Year_Built` la recta tiene una pendiente no muy pronunciada durante casi todo su dominio, y al final sube bruscamente para los valores más altos. Esto quiere decir que, un incremento de una unidad en esta variable produce un incremento mayor en la respuesta cuando esta variable explicativa toma valores más altos.  
+
+\hspace{3mm}
+
+A continuación procederemos a evaluar las predicciones en la muestra de test:
+
+
+```{r}
+pred<-predict(caret.mars,newdata=test)
+accuracy(pred,obs)
+```
+
+Obtenemos un  R cuadrado ajustado igual a $0.762$, mayor que el obtenido anteriormente con la regresión Lasso $(0.7058)$. El RMSE en este caso es 47.9024, menor que en el caso anterior, por lo que este modelo es mejor que el de regresión Lasso bajo ambos criterios.
+
+
+
+Otra forma de ver que este modelo es mejor es con el gráfico de observaciones frente a predicciones:
+
+```{r predicciones observaciones mars, out.width="80%", fig.align = 'center'}
+plot(pred, obs, xlab = "Predicciones", ylab = "Observaciones",main="MARS")
+abline(a = 0, b = 1)
+```
+En este caso vemos que los puntos se ajustan mucho mejor a la recta $y=x$ que en el modelo anterior
+
+\hspace{3mm}
+
+Por último, ajustaremos una red neuronal con una única capa oculta (redes \textit{feed fordward}) empleando el método `nnet` del paquete `caret`.  Esta metodología destaca por dar lugar a modelos con un número muy elevado de parámetros, es preciso por lo tanto que para que las redes neuronales tengan un rendimiento aceptable, se disponga de tamaños muestrales grandes, en esta caso tenemos un tamaño muestral aceptablemente grande (1000 observaciones). Además, la cantidad elevada de parámetros provoca que tengan una gran tendencia al sobreajuste.  Se puede mitigar este problema penalizando los parámetros de la misma manera que en la regresión \textit{ridge}. En este contexto a esta penalización se le llama reducción de los pesos (\textit{weight decay}).  
+En esta modelización del problema tenemos que seleccionar el parámetro regularizador de los pesos $\lambda$ y el número de nodos en la capa $M$.  
+
+\hspace{3mm}
+
+Empezaremos fijando  `decay=0.001` y seleccionando el número de nodos en la capa oculta mediante validación cruzada con 5 grupos, con `size = seq(10, 20, by = 5)`, y considerando un máximo de 150 iteraciones en el algoritmo de aprendizaje.
+
+```{r, warning=FALSE, message=FALSE, out.width="60%", fig.align = 'center'}
+tuneGrid <- expand.grid(size = seq(10,20,by=5), decay=0.001)
+set.seed(40)
+caret.nnet <- train(Sqrt_Price ~ ., data = train, method = "nnet",
+                    preProc = c("range"), # Reescalado en [0,1]
+                    tuneGrid = tuneGrid,
+                    trControl = trainControl(method = "cv", number = 5), 
+                    linout = TRUE, maxit = 150, trace = FALSE)
+
+ggplot(caret.nnet, highlight = TRUE)
+```
+
+Observamos que se alcanza el mínimo en size=20.
+
+```{r}
+caret.nnet$bestTune
+```
+
+\hspace{3mm}
+
+Analizamos el modelo resultante: 
+
+```{r}
+summary(caret.nnet$finalModel)
+```
+ 
+\hspace{3mm} 
+ 
+La red obtenida puede representarse gráficamente usando el paquete `NeuralNetTool`s:
+
+```{r, out.width="71%", fig.align = 'center'}
+
+library(NeuralNetTools)
+plotnet(caret.nnet$finalModel)
+```
+Observamos una capa de entrada, con unidades que representan los campos de entrada, una capa oculta y una capa de salida, que representa los campos de destino, sin embargo el gráfico obtenido es difícilmente interpretable.
+
+
+\hspace{3mm}
+
+El gráfico de observaciones frente a predicciones para este modelo es el siguiente: 
+```{r observaciones predicciones red neuronal, out.width="80%", fig.align = 'center'}
+
+obs<-test$Sqrt_Price
+pred <- predict(caret.nnet, newdata = test)
+plot(pred, obs, main = "Red neuronal",
+     xlab = "Predicción", ylab = "Observado")
+abline(a = 0, b = 1)
+abline(lm(obs ~ pred), lty = 2)
+
+accuracy(pred, obs)
+
+```
+Parece que los puntos se adaptan mejor a la regla que en la regresión Lasso, pero no necesariamente mejor que para el modelo MARS. Comprobamos las medidas de precisión: 
+
+```{r precision red neuronal}
+accuracy(pred, obs)
+```
+
+En este caso se tiene que el pseudo R cuadrado ajustado es igual a   $0.7606282$, mientras que el RMSE es $48.045$.
+
+
+Podemos comparar estas dos medidas de precisión para los tres modelos
+
+\newpage
+```{r tablas,echo=FALSE}
+library(knitr)
+tabla<-matrix(c(0.7058,0.7620,0.7606,53.2624,47.9044,48.0452),ncol=2)
+colnames(tabla)<-c("R^2","RMSE")
+rownames(tabla)<-c("Lasso","MARS","Red neuronal")
+knitr::kable(tabla)
+```
+
+
+
+Vemos que, bajo ambos criterios, la red neuronal da peores resultados que el MARS. Pese a que esta diferencia es muy pequeña, cabe destacar también que la red neuronal es mucho menos interpretable lo cual supone una desventaja adicional, por lo que el modelo más apropiado para este caso sería el MARS.

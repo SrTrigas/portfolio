@@ -1,0 +1,152 @@
+---
+title: "Ejercicios: Introducción al Aprendizaje Estadístico"
+author: "Aprendizaje Estadístico"
+output: html_document
+---
+
+<!--
+knitr::purl("01-introduccion-ejercicios.Rmd", documentation = 2)
+knitr::spin("01-introduccion-ejercicios.R", knit = FALSE)
+
+# Ejercicios Capítulo 1 
+
+En esta sección se incluyen (posibles) soluciones a los ejercicios propuestos a lo largo del Capítulo 1 para consolidar conocimientos. 
+-->
+
+
+##  Ejercicio 1.1: entrenamiento/validación/test
+
+Considerando el ejemplo de la Sección 1.3.4, particionar la muestra en datos de entrenamiento (70\%), de validación (15\%) y de test (15\%), para entrenar los modelos polinómicos, seleccionar el grado óptimo (el hiperparámetro) y evaluar las predicciones del modelo final, respectivamente.
+
+Podría ser de utilidad el siguiente código (basado en la aproximación de `rattle`), que particiona los datos suponiendo que están almacenados en el data.frame `df`:
+
+```{r}
+data(Boston, package = "MASS")
+df <- Boston
+set.seed(1)
+nobs <- nrow(df)
+itrain <- sample(nobs, 0.7 * nobs)
+inotrain <- setdiff(seq_len(nobs), itrain)
+ivalidate <- sample(inotrain, 0.15 * nobs)
+itest <- setdiff(inotrain, ivalidate)
+train <- df[itrain, ]
+validate <- df[ivalidate, ]
+test <- df[itest, ]
+```    
+  
+Alternativamente podríamos emplear la función `split()` creando un factor que divida aleatoriamente los datos en tres grupos (versión "simplificada" de una propuesta en este [post](https://stackoverflow.com/questions/36068963/r-how-to-split-a-data-frame-into-training-validation-and-test-sets)):
+
+```{r}
+set.seed(1)
+p <- c(train = 0.7, validate = 0.15, test = 0.15)
+f <- sample( rep(factor(seq_along(p), labels = names(p)),
+                 times = nrow(df)*p/sum(p)) )
+samples <- suppressWarnings(split(df, f))
+str(samples, 1)
+```
+
+
+### Solución
+
+Empleamos la primera opción:
+
+```{r }
+df <- Boston
+set.seed(1)
+nobs <- nrow(df)
+itrain <- sample(nobs, 0.7 * nobs)
+inotrain <- setdiff(seq_len(nobs), itrain)
+ivalidate <- sample(inotrain, 0.15 * nobs)
+itest <- setdiff(inotrain, ivalidate)
+train <- df[itrain, ]
+validate <- df[ivalidate, ]
+test <- df[itest, ]
+```
+
+Podríamos adaptar fácilmente el código empleado en la Sección 1.3.3 para 
+validación cruzada para este caso:
+
+```{r}
+grado.max <- 10
+grados <- seq_len(grado.max)
+v.mse <- v.mse.sd <- numeric(grado.max)
+for(grado in grados){
+  modelo <- lm(medv ~ poly(lstat, grado), train)
+  v.res <- validate$medv - predict(modelo, newdata = validate)
+  se <- v.res^2
+  v.mse[grado] <- mean(se)
+  v.mse.sd[grado] <- sd(se)/sqrt(length(se))
+}
+```
+
+Podemos representar el error cuadrático medio en la muestra de validación 
+dependiendo del grado del polinomio (complejidad) y su valor óptimo:
+
+```{r}
+plot(grados, v.mse, ylim = c(25, 45),
+  xlab = "Grado del polinomio (complejidad)")
+# Valor óptimo
+imin.mse <- which.min(v.mse)
+grado.op <- grados[imin.mse]
+points(grado.op, v.mse[imin.mse], pch = 16)
+```
+
+En este caso, como el conjunto de validación es muy pequeño (realmente no sería 
+recomendable usar esta partición), la regla *oneSE* va a dar lugar a modelos 
+demasiado simples (los intervalos de confianza son muy grandes):
+
+```{r }
+plot(grados, v.mse, ylim = c(25, 45))
+segments(grados, v.mse - v.mse.sd, grados, v.mse + v.mse.sd)
+# Límite superior "oneSE rule" y complejidad mínima por debajo de ese valor
+upper.v.mse <- v.mse[imin.mse] + v.mse.sd[imin.mse]
+abline(h = upper.v.mse, lty = 2)
+imin.1se <- min(which(v.mse <= upper.v.mse))
+grado.1se <- grados[imin.1se]
+points(grado.1se, v.mse[imin.1se], pch = 16)
+grado.1se
+```
+
+El último paso sería ajustar el modelo final combinando la muestra de entrenamiento 
+y su evaluación en la muestra de test:
+
+```{r}
+modelo.final <- lm(medv ~ poly(lstat, grado.op), data = df[-itest])
+plot(medv ~ lstat, data = df[-itest])
+newdata <- data.frame(lstat = seq(0, 40, len = 100))
+lines(newdata$lstat, predict(modelo.final, newdata = newdata))
+
+# validar en test
+obs <- test$medv
+pred <- predict(modelo.final, newdata = test)
+
+plot(pred, obs, xlab = "Predicción", ylab = "Observado")
+abline(a = 0, b = 1)
+res <- lm(obs ~ pred)
+# summary(res)
+abline(res, lty = 2)
+accuracy <- function(pred, obs, na.rm = FALSE, 
+                     tol = sqrt(.Machine$double.eps)) {
+  err <- obs - pred     # Errores
+  if(na.rm) {
+    is.a <- !is.na(err)
+    err <- err[is.a]
+    obs <- obs[is.a]
+  }  
+  perr <- 100*err/pmax(obs, tol)  # Errores porcentuales
+  return(c(
+    me = mean(err),           # Error medio
+    rmse = sqrt(mean(err^2)), # Raíz del error cuadrático medio 
+    mae = mean(abs(err)),     # Error absoluto medio
+    mpe = mean(perr),         # Error porcentual medio
+    mape = mean(abs(perr)),   # Error porcentual absoluto medio
+    r.squared = 1 - sum(err^2)/sum((obs - mean(obs))^2) # Pseudo R-cuadrado
+  ))
+}
+accuracy(pred, obs)
+```
+
+Si la muestra de entrenamiento fuese ya muy grande (de forma que añadir la de 
+validación no supondría un cambio en los resultados), se podría evitar
+tener que volver a ajustar, conservando el mejor modelo en el bucle de búsqueda
+del hiperparámetro óptimo.
