@@ -1,3 +1,9 @@
+<style>
+    body {
+        background-color: #81E4DB;
+    }
+</style>
+
 # Data Science Portfolio
 
 Welcome to my Data Science Portfolio! Here you will find a collection of projects where I apply Data Science techniques and skills to solve problems and extract valuable insights from data. This README will provide an overview of the repository contents and how to navigate through them.
